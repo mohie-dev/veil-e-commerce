@@ -8,44 +8,29 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-// ==================== ENUMS ====================
-
-enum Role {
-  ADMIN
-  CUSTOMER
-}
-
-enum OrderStatus {
-  PENDING
-  CONFIRMED
-  SHIPPED
-  DELIVERED
-  CANCELLED
-}
-
-enum ItemType {
-  PRODUCT
-  PACKAGE
-}
-
-// ==================== MODELS ====================
-
 model User {
   id        String   @id @default(uuid())
   name      String
   email     String   @unique
   password  String
-  phone     String?
-  address   String?
-  role      Role     @default(CUSTOMER)
-  
-  cart      Cart?
-  orders    Order[]
-
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  isActive  Boolean  @default(true)
 
   @@map("users")
+}
+
+model Customer {
+  id        String   @id @default(uuid())
+  name      String
+  phone     String   @unique
+  email     String?
+  address   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  orders    Order[]
+
+  @@map("customers")
 }
 
 model Category {
@@ -54,11 +39,10 @@ model Category {
   slug        String    @unique
   description String?
   image       String?
-  
-  products    Product[]
-
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+  isActive    Boolean   @default(true)
+  products    Product[]
 
   @@map("categories")
 }
@@ -72,22 +56,18 @@ model Product {
   discountPrice     Decimal?      @db.Decimal(10, 2)
   discountExpiresAt DateTime?
   stock             Int           @default(0)
-  size              String        
-  concentration     String?      
-  notes             Json?         
-  images            String[]     
+  size              String
+  concentration     String?
+  notes             Json?
+  images            String[]
   isFeatured        Boolean       @default(false)
   isActive          Boolean       @default(true)
-
   categoryId        String
-  category          Category      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-
-  packageItems      PackageItem[]
-  cartItems         CartItem[]
-  orderItems        OrderItem[]
-
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
+  orderItems        OrderItem[]
+  packageItems      PackageItem[]
+  category          Category      @relation(fields: [categoryId], references: [id])
 
   @@index([categoryId])
   @@index([slug])
@@ -105,13 +85,10 @@ model Package {
   images            String[]
   isFeatured        Boolean       @default(false)
   isActive          Boolean       @default(true)
-
-  items             PackageItem[]
-  cartItems         CartItem[]
-  orderItems        OrderItem[]
-
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
+  orderItems        OrderItem[]
+  items             PackageItem[]
 
   @@index([slug])
   @@map("packages")
@@ -120,89 +97,81 @@ model Package {
 model PackageItem {
   id        String  @id @default(uuid())
   quantity  Int     @default(1)
-
   packageId String
-  package   Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
-
   productId String
-  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  package   Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id])
 
   @@unique([packageId, productId])
   @@map("package_items")
 }
 
-model Cart {
-  id        String     @id @default(uuid())
-  userId    String     @unique
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  items     CartItem[]
-
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
-
-  @@map("carts")
-}
-
-model CartItem {
-  id        String   @id @default(uuid())
-  itemType  ItemType
-  quantity  Int      @default(1)
-
-  cartId    String
-  cart      Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
-
-  productId String?
-  product   Product? @relation(fields: [productId], references: [id], onDelete: Cascade)
-
-  packageId String?
-  package   Package? @relation(fields: [packageId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([cartId, productId])
-  @@unique([cartId, packageId])
-  @@map("cart_items")
-}
-
 model Order {
-  id              String      @id @default(uuid())
-  orderNumber     String      @unique
-  totalAmount     Decimal     @db.Decimal(10, 2)
-  status          OrderStatus @default(PENDING)
-  shippingAddress String
-  phone           String
-  notes           String?
-  paymentMethod   String      @default("COD")
+  id               String      @id @default(uuid())
+  orderNumber      String      @unique
+  status           OrderStatus @default(PENDING)
+  shippingAddress  String
+  notes            String?
+  paymentMethod    String      @default("COD")
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  alternativePhone String?
+  customerId       String
+  customerName     String
+  customerPhone    String
+  deliveryFee      Decimal     @db.Decimal(10, 2)
+  governorate      String
+  subtotal         Decimal     @db.Decimal(10, 2)
+  total            Decimal     @db.Decimal(10, 2)
+  items            OrderItem[]
+  customer         Customer    @relation(fields: [customerId], references: [id])
 
-  userId          String
-  user            User        @relation(fields: [userId], references: [id], onDelete: Restrict)
-
-  items           OrderItem[]
-
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-
-  @@index([userId])
+  @@index([customerPhone])
   @@index([status])
   @@map("orders")
 }
 
 model OrderItem {
-  id              String   @id @default(uuid())
-  itemType        ItemType
-  quantity        Int
-  priceAtPurchase Decimal  @db.Decimal(10, 2)
-
-  orderId         String
-  order           Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-
-  productId       String?
-  product         Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
-
-  packageId       String?
-  package         Package? @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  id        String   @id @default(uuid())
+  itemType  ItemType
+  quantity  Int
+  orderId   String
+  productId String?
+  packageId String?
+  itemName  String
+  subtotal  Decimal  @db.Decimal(10, 2)
+  unitPrice Decimal  @db.Decimal(10, 2)
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  package   Package? @relation(fields: [packageId], references: [id])
+  product   Product? @relation(fields: [productId], references: [id])
 
   @@map("order_items")
+}
+
+model StoreSettings {
+  id                    String   @id @default(uuid())
+  storeName             String   @default("Veil")
+  phone                 String?
+  whatsapp              String?
+  instagramUrl          String?
+  facebookUrl           String?
+  defaultDeliveryFee    Decimal  @default(60) @db.Decimal(10, 2)
+  freeShippingThreshold Decimal? @db.Decimal(10, 2)
+  isOpen                Boolean  @default(true)
+  updatedAt             DateTime @updatedAt
+
+  @@map("store_settings")
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum ItemType {
+  PRODUCT
+  PACKAGE
 }
