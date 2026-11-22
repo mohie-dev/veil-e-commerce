@@ -8,9 +8,14 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
 import { AppService } from './app.service.js';
 import { AppController } from './app.controller.js';
+import { JwtAuthGuard } from './common/guards/jwt-auth.guard.js';
+import { UsersModule } from './modules/users/users.module.js';
+import { AuthModule } from './modules/auth/auth.module.js';
 
 @Module({
   imports: [
+    UsersModule,
+    AuthModule,
     ConfigModule.forRoot({
       isGlobal: true,
       validationSchema: envValidationSchema,
@@ -36,6 +41,10 @@ import { AppController } from './app.controller.js';
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: JwtAuthGuard,
     },
   ],
   controllers: [AppController],
