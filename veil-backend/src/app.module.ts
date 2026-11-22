@@ -11,11 +11,15 @@ import { AppController } from './app.controller.js';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard.js';
 import { UsersModule } from './modules/users/users.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
+import { UploadModule } from './modules/upload/upload.module.js';
+import { CategoriesModule } from './modules/categories/catigories.module.js';
 
 @Module({
   imports: [
-    UsersModule,
     AuthModule,
+    UsersModule,
+    CategoriesModule,
+    UploadModule,
     ConfigModule.forRoot({
       isGlobal: true,
       validationSchema: envValidationSchema,
