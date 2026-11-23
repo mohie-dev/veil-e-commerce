@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
-import { ArrowRight, Instagram, Menu, Minus, Plus, ShoppingBag, Trash2, X } from 'lucide-react';
+import { ArrowRight, Facebook, Instagram, Menu, MessageCircle, Minus, Phone, Plus, ShoppingBag, Trash2, X } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import api from '../lib/api';
@@ -13,6 +13,8 @@ export function StoreLayout() {
   const [menuOpen, setMenuOpen] = useState(false);
   const cartCount = useCart((state) => state.items.reduce((sum, item) => sum + item.quantity, 0));
   const location = useLocation();
+  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: async () => (await api.get<StoreSettings>('/settings')) as unknown as StoreSettings });
+  const phoneLink = settings?.phone?.replace(/[^\d+]/g, '');
 
   return (
     <div className="store-shell">
@@ -48,13 +50,28 @@ export function StoreLayout() {
             <Link to="/packages">Gift sets</Link>
             <Link to="/track">Track your order</Link>
           </div>
-          <a className="social-link" href="https://instagram.com" target="_blank" rel="noreferrer"><Instagram size={16} /> Follow the trace</a>
+          <div className="footer-contact">
+            {settings?.phone && phoneLink && <a className="social-link" href={`tel:${phoneLink}`}><Phone size={16} /> {settings.phone}</a>}
+            {settings?.whatsapp && <a className="social-link" href={whatsappHref(settings.whatsapp)} target="_blank" rel="noreferrer"><MessageCircle size={16} /> WhatsApp</a>}
+            {settings?.instagramUrl && <a className="social-link" href={settings.instagramUrl} target="_blank" rel="noreferrer"><Instagram size={16} /> Instagram</a>}
+            {settings?.facebookUrl && <a className="social-link" href={settings.facebookUrl} target="_blank" rel="noreferrer"><Facebook size={16} /> Facebook</a>}
+          </div>
         </div>
-        <div className="container footer-bottom"><span>© {new Date().getFullYear()} Veil Perfumes</span><span>Made to linger.</span></div>
+        <div className="container footer-bottom"><span>© {new Date().getFullYear()} {settings?.storeName || 'Veil Perfumes'}</span><span>Made to linger.</span></div>
       </footer>
       <CartDrawer open={cartOpen} onClose={() => setCartOpen(false)} />
     </div>
   );
+}
+
+function whatsappHref(phone: string) {
+  const digits = phone.replace(/\D/g, '');
+  const internationalNumber = digits.startsWith('00')
+    ? digits.slice(2)
+    : digits.startsWith('0')
+      ? `20${digits.slice(1)}`
+      : digits;
+  return `https://wa.me/${internationalNumber}`;
 }
 
 export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
