@@ -16,11 +16,13 @@ import { CategoriesModule } from './modules/categories/catigories.module.js';
 import { ProductsModule } from './modules/products/products.module.js';
 import { PackagesModule } from './modules/packages/packages.module.js';
 import { SettingsModule } from './modules/settings/settings.module.js';
+import { CustomersModule } from './modules/customers/customers.module.js';
 
 @Module({
   imports: [
     AuthModule,
     UsersModule,
+    CustomersModule,
     CategoriesModule,
     ProductsModule,
     PackagesModule,
