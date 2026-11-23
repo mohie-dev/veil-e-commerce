@@ -13,12 +13,16 @@ import { UsersModule } from './modules/users/users.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { UploadModule } from './modules/upload/upload.module.js';
 import { CategoriesModule } from './modules/categories/catigories.module.js';
+import { ProductsModule } from './modules/products/products.module.js';
+import { PackagesModule } from './modules/packages/packages.module.js';
 
 @Module({
   imports: [
     AuthModule,
     UsersModule,
     CategoriesModule,
+    ProductsModule,
+    PackagesModule,
     UploadModule,
     ConfigModule.forRoot({
       isGlobal: true,
