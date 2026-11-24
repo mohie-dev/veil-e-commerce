@@ -40,8 +40,22 @@ function SectionHeading({ eyebrow, title, copy, link, to }: { eyebrow: string; t
 }
 
 export function HomePage() {
-  const products = useQuery({ queryKey: ['products', 'featured'], queryFn: async () => (await api.get<Paginated<Product>>('/products', { params: { isFeatured: true, limit: 4 } })) as unknown as Paginated<Product> });
-  const packages = useQuery({ queryKey: ['packages', 'featured'], queryFn: async () => (await api.get<Paginated<GiftPackage>>('/packages', { params: { isFeatured: true, limit: 3 } })) as unknown as Paginated<GiftPackage> });
+  const products = useQuery({
+    queryKey: ['products', 'featured'],
+    queryFn: async () => {
+      const featured = (await api.get<Paginated<Product>>('/products', { params: { isFeatured: true, limit: 4 } })) as unknown as Paginated<Product>;
+      if (featured.items.length) return featured;
+      return (await api.get<Paginated<Product>>('/products', { params: { limit: 4 } })) as unknown as Paginated<Product>;
+    },
+  });
+  const packages = useQuery({
+    queryKey: ['packages', 'featured'],
+    queryFn: async () => {
+      const featured = (await api.get<Paginated<GiftPackage>>('/packages', { params: { isFeatured: true, limit: 3 } })) as unknown as Paginated<GiftPackage>;
+      if (featured.items.length) return featured;
+      return (await api.get<Paginated<GiftPackage>>('/packages', { params: { limit: 3 } })) as unknown as Paginated<GiftPackage>;
+    },
+  });
   const heroFallback = useQuery({
     queryKey: ['products', 'hero-image'],
     queryFn: async () => (await api.get<Paginated<Product>>('/products', { params: { limit: 1 } })) as unknown as Paginated<Product>,
