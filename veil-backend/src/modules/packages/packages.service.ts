@@ -8,41 +8,11 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { CreatePackageDto, PackageItemDto } from './dto/create-package.dto.js';
 import { UpdatePackageDto } from './dto/update-package.dto.js';
 import { AdminQueryPackageDto } from './dto/admin-query-package.dto.js';
-
-const PACKAGE_INCLUDE = {
-  items: {
-    include: {
-      product: {
-        select: {
-          id: true,
-          name: true,
-          slug: true,
-          size: true,
-          price: true,
-          stock: true,
-          images: true,
-          isActive: true,
-        },
-      },
-    },
-  },
-} satisfies Prisma.PackageInclude;
-
-export type PackageWithItems = Prisma.PackageGetPayload<{
-  include: typeof PACKAGE_INCLUDE;
-}>;
-
-export interface FormattedPackage extends Omit<
+import {
+  FormattedPackage,
+  PACKAGE_INCLUDE,
   PackageWithItems,
-  'price' | 'discountPrice'
-> {
-  price: number;
-  discountPrice: number | null;
-  effectivePrice: number;
-  hasActiveDiscount: boolean;
-  availableStock: number;
-  inStock: boolean;
-}
+} from './interfaces/package.interface.js';
 
 @Injectable()
 export class PackagesService {
@@ -69,26 +39,24 @@ export class PackagesService {
     }
   }
 
-  private async validatePackageProducts(
-    items: PackageItemDto[],
-  ): Promise<void> {
-    const productIds = items.map((item) => item.productId);
-    const uniqueIds = new Set(productIds);
+  private async validatePackageVariants(items: PackageItemDto[]): Promise<void> {
+    const variantIds = items.map((item) => item.variantId);
+    const uniqueIds = new Set(variantIds);
 
-    if (uniqueIds.size !== productIds.length) {
+    if (uniqueIds.size !== variantIds.length) {
       throw new BadRequestException(
-        'Duplicate products in package items. Increase quantity instead.',
+        'Duplicate size variants in package items. Increase quantity instead.',
       );
     }
 
-    const existingProducts = await this.prisma.product.findMany({
-      where: { id: { in: productIds } },
+    const existingVariants = await this.prisma.productVariant.findMany({
+      where: { id: { in: variantIds } },
       select: { id: true },
     });
 
-    if (existingProducts.length !== productIds.length) {
+    if (existingVariants.length !== variantIds.length) {
       throw new BadRequestException(
-        'One or more selected products do not exist',
+        'One or more selected product variants do not exist',
       );
     }
   }
@@ -109,8 +77,10 @@ export class PackagesService {
     let availableStock = 0;
     if (pkg.items.length > 0) {
       const stocksPerItem = pkg.items.map((item) => {
-        if (!item.product.isActive) return 0;
-        return Math.floor(item.product.stock / item.quantity);
+        if (!item.variant.isActive || !item.variant.product.isActive) {
+          return 0;
+        }
+        return Math.floor(item.variant.stock / item.quantity);
       });
       availableStock = Math.min(...stocksPerItem);
     }
@@ -128,7 +98,7 @@ export class PackagesService {
 
   async create(dto: CreatePackageDto): Promise<FormattedPackage> {
     this.validateDiscount(dto.price, dto.discountPrice);
-    await this.validatePackageProducts(dto.items);
+    await this.validatePackageVariants(dto.items);
 
     const created = await this.prisma.package.create({
       data: {
@@ -145,7 +115,7 @@ export class PackagesService {
         isActive: dto.isActive ?? true,
         items: {
           create: dto.items.map((item) => ({
-            productId: item.productId,
+            variantId: item.variantId,
             quantity: item.quantity,
           })),
         },
@@ -180,7 +150,10 @@ export class PackagesService {
       }),
       ...(onSale && {
         discountPrice: { not: null },
-        OR: [{ discountExpiresAt: null }, { discountExpiresAt: { gt: now } }],
+        OR: [
+          { discountExpiresAt: null },
+          { discountExpiresAt: { gt: now } },
+        ],
       }),
     };
 
@@ -236,7 +209,7 @@ export class PackagesService {
     this.validateDiscount(finalPrice, finalDiscount);
 
     if (dto.items) {
-      await this.validatePackageProducts(dto.items);
+      await this.validatePackageVariants(dto.items);
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
@@ -264,7 +237,7 @@ export class PackagesService {
           ...(dto.items && {
             items: {
               create: dto.items.map((item) => ({
-                productId: item.productId,
+                variantId: item.variantId,
                 quantity: item.quantity,
               })),
             },

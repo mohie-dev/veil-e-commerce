@@ -32,6 +32,6 @@ export interface PreparedOrderItem {
   unitPrice: number;
   quantity: number;
   subtotal: number;
-  productId: string | null;
+  variantId: string | null;
   packageId: string | null;
 }

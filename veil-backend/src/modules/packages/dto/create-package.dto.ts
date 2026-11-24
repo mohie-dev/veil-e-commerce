@@ -17,10 +17,13 @@ import {
 } from 'class-validator';
 
 export class PackageItemDto {
-  @ApiProperty({ example: '550e8400-e29b-41d4-a716-446655440000' })
+  @ApiProperty({
+    example: '550e8400-e29b-41d4-a716-446655440000',
+    description: 'UUID of the specific ProductVariant (size)',
+  })
   @IsUUID()
   @IsNotEmpty()
-  productId: string;
+  variantId: string;
 
   @ApiProperty({ example: 1, default: 1 })
   @IsInt()
@@ -35,8 +38,7 @@ export class CreatePackageDto {
   name: string;
 
   @ApiProperty({
-    example:
-      'Luxury gift set featuring Midnight Oud 100ml and Amber Noir 50ml.',
+    example: 'Luxury gift set featuring Midnight Oud 100ml and Amber Noir 50ml.',
   })
   @IsString()
   @IsNotEmpty()

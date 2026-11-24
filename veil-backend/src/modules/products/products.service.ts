@@ -3,52 +3,114 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, Product } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
-import { CategoriesService } from '../categories/categories.service.js';
+import { VariantsService } from '../variants/variants.service.js';
 import { CreateProductDto } from './dto/create-product.dto.js';
 import { UpdateProductDto } from './dto/update-product.dto.js';
-import { QueryProductDto } from './dto/query-product.dto.js';
 import { AdminQueryProductDto } from './dto/admin-query-product.dto.js';
+import {
+  FormattedProduct,
+  PRODUCT_INCLUDE,
+  ProductWithRelations,
+} from './interfaces/product.interface.js';
 
 @Injectable()
 export class ProductsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly categoriesService: CategoriesService,
+    private readonly variantsService: VariantsService,
   ) {}
 
-  async create(dto: CreateProductDto) {
-    await this.categoriesService.findOne(dto.categoryId);
-    this.validateDiscount(dto.price, dto.discountPrice);
+  private generateSlug(name: string): string {
+    const baseSlug = name
+      .toLowerCase()
+      .trim()
+      .replace(/[^\w\s-]/g, '')
+      .replace(/[\s_-]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    const suffix = Math.floor(1000 + Math.random() * 9000);
+    return `${baseSlug}-${suffix}`;
+  }
 
-    const product = await this.prisma.product.create({
+  formatProduct(product: ProductWithRelations): FormattedProduct {
+    const formattedVariants = product.variants.map((variant) =>
+      this.variantsService.formatVariant(variant),
+    );
+
+    const activeVariants = formattedVariants.filter((v) => v.isActive);
+    const priceSource =
+      activeVariants.length > 0 ? activeVariants : formattedVariants;
+
+    const startingPrice =
+      priceSource.length > 0
+        ? Math.min(...priceSource.map((v) => v.effectivePrice))
+        : 0;
+
+    return {
+      ...product,
+      variants: formattedVariants,
+      startingPrice,
+      hasActiveDiscount: activeVariants.some((v) => v.hasActiveDiscount),
+      inStock: formattedVariants.some((v) => v.inStock),
+    };
+  }
+
+  async create(dto: CreateProductDto): Promise<FormattedProduct> {
+    const category = await this.prisma.category.findUnique({
+      where: { id: dto.categoryId },
+      select: { id: true },
+    });
+
+    if (!category) {
+      throw new BadRequestException('Selected category does not exist');
+    }
+
+    const normalizedSizes = new Set<string>();
+    for (const variant of dto.variants) {
+      const size = variant.size.trim();
+      if (normalizedSizes.has(size.toLowerCase())) {
+        throw new BadRequestException(
+          `Duplicate size "${size}" in variants list`,
+        );
+      }
+      normalizedSizes.add(size.toLowerCase());
+      this.variantsService.validateDiscount(
+        variant.price,
+        variant.discountPrice,
+      );
+    }
+
+    const created = await this.prisma.product.create({
       data: {
         name: dto.name,
         slug: this.generateSlug(dto.name),
         description: dto.description,
-        price: dto.price,
-        discountPrice: dto.discountPrice ?? null,
-        discountExpiresAt: dto.discountExpiresAt
-          ? new Date(dto.discountExpiresAt)
-          : null,
-        stock: dto.stock,
-        size: dto.size,
-        concentration: dto.concentration,
+        concentration: dto.concentration ?? null,
         notes: dto.notes
-          ? (dto.notes as unknown as Prisma.InputJsonValue)
+          ? (dto.notes as Prisma.InputJsonValue)
           : Prisma.JsonNull,
         images: dto.images,
         categoryId: dto.categoryId,
         isFeatured: dto.isFeatured ?? false,
         isActive: dto.isActive ?? true,
+        variants: {
+          create: dto.variants.map((v) => ({
+            size: v.size.trim(),
+            price: v.price,
+            discountPrice: v.discountPrice ?? null,
+            discountExpiresAt: v.discountExpiresAt
+              ? new Date(v.discountExpiresAt)
+              : null,
+            stock: v.stock ?? 0,
+            isActive: v.isActive ?? true,
+          })),
+        },
       },
-      include: {
-        category: { select: { id: true, name: true, slug: true } },
-      },
+      include: PRODUCT_INCLUDE,
     });
 
-    return this.formatProduct(product);
+    return this.formatProduct(created);
   }
 
   async findAll(query: AdminQueryProductDto) {
@@ -69,18 +131,8 @@ export class ProductsService {
     const skip = (page - 1) * limit;
     const now = new Date();
 
-    const where: Prisma.ProductWhereInput = {
-      ...(isActive !== undefined && { isActive }),
+    const variantFilter: Prisma.ProductVariantWhereInput = {
       ...(lowStock && { stock: { lte: 5 } }),
-      ...(categoryId && { categoryId }),
-      ...(categorySlug && { category: { slug: categorySlug } }),
-      ...(isFeatured !== undefined && { isFeatured }),
-      ...(search && {
-        OR: [
-          { name: { contains: search, mode: 'insensitive' } },
-          { description: { contains: search, mode: 'insensitive' } },
-        ],
-      }),
       ...((minPrice !== undefined || maxPrice !== undefined) && {
         price: {
           ...(minPrice !== undefined && { gte: minPrice }),
@@ -88,8 +140,25 @@ export class ProductsService {
         },
       }),
       ...(onSale && {
+        isActive: true,
         discountPrice: { not: null },
         OR: [{ discountExpiresAt: null }, { discountExpiresAt: { gt: now } }],
+      }),
+    };
+
+    const hasVariantFilter = Object.keys(variantFilter).length > 0;
+
+    const where: Prisma.ProductWhereInput = {
+      ...(isActive !== undefined && { isActive }),
+      ...(categoryId && { categoryId }),
+      ...(categorySlug && { category: { slug: categorySlug } }),
+      ...(isFeatured !== undefined && { isFeatured }),
+      ...(hasVariantFilter && { variants: { some: variantFilter } }),
+      ...(search && {
+        OR: [
+          { name: { contains: search, mode: 'insensitive' } },
+          { description: { contains: search, mode: 'insensitive' } },
+        ],
       }),
     };
 
@@ -98,10 +167,8 @@ export class ProductsService {
         where,
         skip,
         take: limit,
-        orderBy: lowStock ? { stock: 'asc' } : { createdAt: 'desc' },
-        include: {
-          category: { select: { id: true, name: true, slug: true } },
-        },
+        orderBy: { createdAt: 'desc' },
+        include: PRODUCT_INCLUDE,
       }),
       this.prisma.product.count({ where }),
     ]);
@@ -117,7 +184,7 @@ export class ProductsService {
     };
   }
 
-  async findOne(idOrSlug: string) {
+  async findOne(idOrSlug: string): Promise<FormattedProduct> {
     const isUuid =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
         idOrSlug,
@@ -125,9 +192,7 @@ export class ProductsService {
 
     const product = await this.prisma.product.findUnique({
       where: isUuid ? { id: idOrSlug } : { slug: idOrSlug },
-      include: {
-        category: { select: { id: true, name: true, slug: true } },
-      },
+      include: PRODUCT_INCLUDE,
     });
 
     if (!product) {
@@ -137,55 +202,38 @@ export class ProductsService {
     return this.formatProduct(product);
   }
 
-  async update(id: string, dto: UpdateProductDto) {
-    const existing = await this.findOne(id);
+  async update(id: string, dto: UpdateProductDto): Promise<FormattedProduct> {
+    await this.findOne(id);
 
     if (dto.categoryId) {
-      await this.categoriesService.findOne(dto.categoryId);
+      const category = await this.prisma.category.findUnique({
+        where: { id: dto.categoryId },
+        select: { id: true },
+      });
+      if (!category) {
+        throw new BadRequestException('Selected category does not exist');
+      }
     }
-
-    const finalPrice = dto.price ?? existing.price;
-    const finalDiscount =
-      dto.discountPrice !== undefined
-        ? dto.discountPrice
-        : existing.discountPrice;
-
-    this.validateDiscount(finalPrice, finalDiscount);
-
-    const data: Prisma.ProductUpdateInput = {
-      ...(dto.name && { name: dto.name }),
-      ...(dto.description && { description: dto.description }),
-      ...(dto.price !== undefined && { price: dto.price }),
-      ...(dto.discountPrice !== undefined && {
-        discountPrice: dto.discountPrice,
-      }),
-      ...(dto.discountExpiresAt !== undefined && {
-        discountExpiresAt: dto.discountExpiresAt
-          ? new Date(dto.discountExpiresAt)
-          : null,
-      }),
-      ...(dto.stock !== undefined && { stock: dto.stock }),
-      ...(dto.size && { size: dto.size }),
-      ...(dto.concentration !== undefined && {
-        concentration: dto.concentration,
-      }),
-      ...(dto.notes !== undefined && {
-        notes: dto.notes as unknown as Prisma.InputJsonValue,
-      }),
-      ...(dto.images && { images: dto.images }),
-      ...(dto.categoryId && {
-        category: { connect: { id: dto.categoryId } },
-      }),
-      ...(dto.isFeatured !== undefined && { isFeatured: dto.isFeatured }),
-      ...(dto.isActive !== undefined && { isActive: dto.isActive }),
-    };
 
     const updated = await this.prisma.product.update({
       where: { id },
-      data,
-      include: {
-        category: { select: { id: true, name: true, slug: true } },
+      data: {
+        ...(dto.name && { name: dto.name }),
+        ...(dto.description && { description: dto.description }),
+        ...(dto.concentration !== undefined && {
+          concentration: dto.concentration,
+        }),
+        ...(dto.notes !== undefined && {
+          notes: dto.notes
+            ? (dto.notes as Prisma.InputJsonValue)
+            : Prisma.JsonNull,
+        }),
+        ...(dto.images && { images: dto.images }),
+        ...(dto.categoryId && { categoryId: dto.categoryId }),
+        ...(dto.isFeatured !== undefined && { isFeatured: dto.isFeatured }),
+        ...(dto.isActive !== undefined && { isActive: dto.isActive }),
       },
+      include: PRODUCT_INCLUDE,
     });
 
     return this.formatProduct(updated);
@@ -194,63 +242,18 @@ export class ProductsService {
   async remove(id: string) {
     await this.findOne(id);
 
-    const linkedPackagesCount = await this.prisma.packageItem.count({
-      where: { productId: id },
+    const linkedPackageItem = await this.prisma.packageItem.findFirst({
+      where: { variant: { productId: id } },
+      select: { id: true },
     });
 
-    if (linkedPackagesCount > 0) {
+    if (linkedPackageItem) {
       throw new BadRequestException(
-        'Cannot delete product because it is included in one or more gift packages. Remove it from packages or deactivate it instead.',
+        'Cannot delete product because one of its sizes is included in a gift package',
       );
     }
 
     await this.prisma.product.delete({ where: { id } });
     return { message: 'Product deleted successfully', data: null };
-  }
-
-  private generateSlug(name: string): string {
-    const baseSlug = name
-      .toLowerCase()
-      .trim()
-      .replace(/[^\w\s-]/g, '')
-      .replace(/[\s_-]+/g, '-')
-      .replace(/^-+|-+$/g, '');
-    const suffix = Math.floor(1000 + Math.random() * 9000);
-    return `${baseSlug}-${suffix}`;
-  }
-
-  private validateDiscount(price: number, discountPrice?: number | null) {
-    if (discountPrice !== undefined && discountPrice !== null) {
-      if (discountPrice >= price) {
-        throw new BadRequestException(
-          'Discount price must be less than the original price',
-        );
-      }
-    }
-  }
-
-  formatProduct(product: Product) {
-    const now = new Date();
-    const price = Number(product.price);
-    const discountPrice = product.discountPrice
-      ? Number(product.discountPrice)
-      : null;
-
-    const isDiscountNotExpired =
-      !product.discountExpiresAt || new Date(product.discountExpiresAt) > now;
-
-    const hasActiveDiscount =
-      discountPrice !== null && discountPrice < price && isDiscountNotExpired;
-
-    const effectivePrice = hasActiveDiscount ? discountPrice : price;
-
-    return {
-      ...product,
-      price,
-      discountPrice,
-      effectivePrice,
-      hasActiveDiscount,
-      inStock: product.stock > 0,
-    };
   }
 }

@@ -18,6 +18,7 @@ import { PackagesModule } from './modules/packages/packages.module.js';
 import { SettingsModule } from './modules/settings/settings.module.js';
 import { CustomersModule } from './modules/customers/customers.module.js';
 import { OrdersModule } from './modules/orders/orders.module.js';
+import { VariantsModule } from './modules/variants/variants.module.js';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { OrdersModule } from './modules/orders/orders.module.js';
     CustomersModule,
     CategoriesModule,
     ProductsModule,
+    VariantsModule,
     OrdersModule,
     PackagesModule,
     UploadModule,

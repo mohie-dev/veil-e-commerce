@@ -4,18 +4,15 @@ import {
   ArrayMinSize,
   IsArray,
   IsBoolean,
-  IsDateString,
-  IsInt,
   IsNotEmpty,
-  IsNumber,
   IsObject,
   IsOptional,
   IsString,
   IsUrl,
   IsUUID,
-  Min,
   ValidateNested,
 } from 'class-validator';
+import { ProductVariantInputDto } from '../../variants/dto/create-variant.dto.js';
 
 export class PerfumeNotesDto {
   @ApiPropertyOptional({ example: 'Bergamot, Pink Pepper' })
@@ -28,7 +25,7 @@ export class PerfumeNotesDto {
   @IsOptional()
   heart?: string;
 
-  @ApiPropertyOptional({ example: 'Agarwood (Oud), Amber, Vanilla' })
+  @ApiPropertyOptional({ example: 'Oud, Amber, Vanilla' })
   @IsString()
   @IsOptional()
   base?: string;
@@ -41,37 +38,11 @@ export class CreateProductDto {
   name: string;
 
   @ApiProperty({
-    example: 'A deep, luxurious blend of aged Cambodian oud and warm amber.',
+    example: 'Deep woody oriental fragrance crafted for evening wear.',
   })
   @IsString()
   @IsNotEmpty()
   description: string;
-
-  @ApiProperty({ example: 1200 })
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(1)
-  price: number;
-
-  @ApiPropertyOptional({ example: 950 })
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(1)
-  @IsOptional()
-  discountPrice?: number;
-
-  @ApiPropertyOptional({ example: '2026-12-31T23:59:59.000Z' })
-  @IsDateString()
-  @IsOptional()
-  discountExpiresAt?: string;
-
-  @ApiProperty({ example: 25 })
-  @IsInt()
-  @Min(0)
-  stock: number;
-
-  @ApiProperty({ example: '100ml' })
-  @IsString()
-  @IsNotEmpty()
-  size: string;
 
   @ApiPropertyOptional({ example: 'Eau de Parfum' })
   @IsString()
@@ -86,7 +57,7 @@ export class CreateProductDto {
   notes?: PerfumeNotesDto;
 
   @ApiProperty({
-    example: ['https://res.cloudinary.com/demo/image/upload/veil-oud.jpg'],
+    example: ['https://res.cloudinary.com/demo/image/upload/midnight-oud.jpg'],
     type: [String],
   })
   @IsArray()
@@ -98,6 +69,13 @@ export class CreateProductDto {
   @IsUUID()
   @IsNotEmpty()
   categoryId: string;
+
+  @ApiProperty({ type: [ProductVariantInputDto] })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => ProductVariantInputDto)
+  variants: ProductVariantInputDto[];
 
   @ApiPropertyOptional({ default: false })
   @IsBoolean()

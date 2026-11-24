@@ -7,8 +7,9 @@ import { ItemType, OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { SettingsService } from '../settings/settings.service.js';
 import { CustomersService } from '../customers/customers.service.js';
-import { ProductsService } from '../products/products.service.js';
+import { VariantsService } from '../variants/variants.service.js';
 import { PackagesService } from '../packages/packages.service.js';
+import { PACKAGE_INCLUDE } from '../packages/interfaces/package.interface.js';
 import { CreateOrderDto, OrderItemInputDto } from './dto/create-order.dto.js';
 import { QueryOrderDto } from './dto/query-order.dto.js';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto.js';
@@ -26,7 +27,7 @@ export class OrdersService {
     private readonly prisma: PrismaService,
     private readonly settingsService: SettingsService,
     private readonly customersService: CustomersService,
-    private readonly productsService: ProductsService,
+    private readonly variantsService: VariantsService,
     private readonly packagesService: PackagesService,
   ) {}
 
@@ -83,14 +84,14 @@ export class OrdersService {
 
     const mergedItems = this.deduplicateItems(dto.items);
     const preparedItems: PreparedOrderItem[] = [];
-    const productDeductions = new Map<string, { name: string; qty: number }>();
+    const variantDeductions = new Map<string, { name: string; qty: number }>();
 
-    const addDeduction = (productId: string, name: string, qty: number) => {
-      const current = productDeductions.get(productId);
+    const addDeduction = (variantId: string, name: string, qty: number) => {
+      const current = variantDeductions.get(variantId);
       if (current) {
         current.qty += qty;
       } else {
-        productDeductions.set(productId, { name, qty });
+        variantDeductions.set(variantId, { name, qty });
       }
     };
 
@@ -98,53 +99,42 @@ export class OrdersService {
 
     for (const item of mergedItems) {
       if (item.itemType === ItemType.PRODUCT) {
-        const product = await this.prisma.product.findUnique({
+        const variant = await this.prisma.productVariant.findUnique({
           where: { id: item.itemId },
+          include: {
+            product: {
+              select: { id: true, name: true, isActive: true },
+            },
+          },
         });
 
-        if (!product || !product.isActive) {
+        if (!variant || !variant.isActive || !variant.product.isActive) {
           throw new BadRequestException(
-            `Product with ID ${item.itemId} is unavailable.`,
+            `Selected product size (${item.itemId}) is unavailable.`,
           );
         }
 
-        const formatted = this.productsService.formatProduct(product);
-        const unitPrice = formatted.effectivePrice;
+        const formattedVariant = this.variantsService.formatVariant(variant);
+        const unitPrice = formattedVariant.effectivePrice;
         const itemSubtotal = unitPrice * item.quantity;
-        subtotal += itemSubtotal;
+        const displayName = `${variant.product.name} (${variant.size})`;
 
-        addDeduction(product.id, product.name, item.quantity);
+        subtotal += itemSubtotal;
+        addDeduction(variant.id, displayName, item.quantity);
 
         preparedItems.push({
           itemType: ItemType.PRODUCT,
-          itemName: `${product.name} (${product.size})`,
+          itemName: displayName,
           unitPrice,
           quantity: item.quantity,
           subtotal: itemSubtotal,
-          productId: product.id,
+          variantId: variant.id,
           packageId: null,
         });
       } else {
         const pkg = await this.prisma.package.findUnique({
           where: { id: item.itemId },
-          include: {
-            items: {
-              include: {
-                product: {
-                  select: {
-                    id: true,
-                    name: true,
-                    slug: true,
-                    size: true,
-                    price: true,
-                    stock: true,
-                    images: true,
-                    isActive: true,
-                  },
-                },
-              },
-            },
-          },
+          include: PACKAGE_INCLUDE,
         });
 
         if (!pkg || !pkg.isActive) {
@@ -159,14 +149,15 @@ export class OrdersService {
         subtotal += itemSubtotal;
 
         for (const pkgItem of pkg.items) {
-          if (!pkgItem.product.isActive) {
+          if (!pkgItem.variant.isActive || !pkgItem.variant.product.isActive) {
             throw new BadRequestException(
-              `Package "${pkg.name}" contains an unavailable product.`,
+              `Package "${pkg.name}" contains an unavailable product size.`,
             );
           }
+
           addDeduction(
-            pkgItem.product.id,
-            pkgItem.product.name,
+            pkgItem.variant.id,
+            `${pkgItem.variant.product.name} (${pkgItem.variant.size})`,
             pkgItem.quantity * item.quantity,
           );
         }
@@ -177,7 +168,7 @@ export class OrdersService {
           unitPrice,
           quantity: item.quantity,
           subtotal: itemSubtotal,
-          productId: null,
+          variantId: null,
           packageId: pkg.id,
         });
       }
@@ -193,10 +184,10 @@ export class OrdersService {
     const total = subtotal + deliveryFee;
 
     const createdOrder = await this.prisma.$transaction(async (tx) => {
-      for (const [productId, info] of productDeductions.entries()) {
-        const updateResult = await tx.product.updateMany({
+      for (const [variantId, info] of variantDeductions.entries()) {
+        const updateResult = await tx.productVariant.updateMany({
           where: {
-            id: productId,
+            id: variantId,
             isActive: true,
             stock: { gte: info.qty },
           },
@@ -343,30 +334,30 @@ export class OrdersService {
         const stockRestorations = new Map<string, number>();
 
         for (const item of existing.items) {
-          if (item.itemType === ItemType.PRODUCT && item.productId) {
+          if (item.itemType === ItemType.PRODUCT && item.variantId) {
             stockRestorations.set(
-              item.productId,
-              (stockRestorations.get(item.productId) ?? 0) + item.quantity,
+              item.variantId,
+              (stockRestorations.get(item.variantId) ?? 0) + item.quantity,
             );
           } else if (item.itemType === ItemType.PACKAGE && item.packageId) {
             const pkgItems = await tx.packageItem.findMany({
               where: { packageId: item.packageId },
-              select: { productId: true, quantity: true },
+              select: { variantId: true, quantity: true },
             });
 
             for (const pkgItem of pkgItems) {
               const qtyToRestore = pkgItem.quantity * item.quantity;
               stockRestorations.set(
-                pkgItem.productId,
-                (stockRestorations.get(pkgItem.productId) ?? 0) + qtyToRestore,
+                pkgItem.variantId,
+                (stockRestorations.get(pkgItem.variantId) ?? 0) + qtyToRestore,
               );
             }
           }
         }
 
-        for (const [productId, qty] of stockRestorations.entries()) {
-          await tx.product.updateMany({
-            where: { id: productId },
+        for (const [variantId, qty] of stockRestorations.entries()) {
+          await tx.productVariant.updateMany({
+            where: { id: variantId },
             data: { stock: { increment: qty } },
           });
         }
