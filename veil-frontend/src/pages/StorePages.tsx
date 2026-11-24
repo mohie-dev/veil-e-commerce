@@ -13,8 +13,29 @@ const governorates = ['Cairo', 'Giza', 'Alexandria', 'Qalyubia', 'Gharbia', 'Dak
 function ProductCard({ product, type = 'PRODUCT' }: { product: Product | GiftPackage; type?: 'PRODUCT' | 'PACKAGE' }) {
   const addItem = useCart((state) => state.addItem);
   const image = product.images[0] || fallbackImage;
-  const inStock = type === 'PRODUCT' ? (product as Product).inStock : (product as GiftPackage).inStock;
-  const subline = type === 'PRODUCT' ? `${(product as Product).concentration || 'Eau de parfum'} · ${(product as Product).size}` : 'A considered gift, beautifully composed';
+  const fragrance = type === 'PRODUCT' ? product as Product : null;
+  const giftSet = type === 'PACKAGE' ? product as GiftPackage : null;
+  const inStock = fragrance ? fragrance.inStock : giftSet?.inStock || false;
+  const firstAvailableVariant = fragrance?.variants.find((variant) => variant.isActive && variant.inStock);
+  const subline = fragrance?.concentration || 'A considered gift, beautifully composed';
+  const addToBag = () => {
+    if (fragrance) {
+      if (!firstAvailableVariant) return;
+      addItem({
+        itemType: 'PRODUCT',
+        itemId: firstAvailableVariant.id,
+        name: fragrance.name,
+        slug: fragrance.slug,
+        size: firstAvailableVariant.size,
+        image,
+        price: firstAvailableVariant.effectivePrice,
+        maxStock: firstAvailableVariant.stock,
+      });
+    } else if (giftSet) {
+      addItem({ itemType: 'PACKAGE', itemId: giftSet.id, name: giftSet.name, slug: giftSet.slug, image, price: giftSet.effectivePrice, maxStock: giftSet.availableStock });
+    }
+    toast.success(`${product.name} added to your bag`);
+  };
   return (
     <article className="product-card">
       <Link to={type === 'PRODUCT' ? `/products/${product.slug}` : `/packages/${product.slug}`} className="product-image-wrap">
@@ -24,13 +45,10 @@ function ProductCard({ product, type = 'PRODUCT' }: { product: Product | GiftPac
         <span className="card-arrow"><ArrowRight size={17} /></span>
       </Link>
       <div className="product-card-copy">
-        <div className="product-card-description"><span className="product-kicker">{subline}</span><Link to={type === 'PRODUCT' ? `/products/${product.slug}` : `/packages/${product.slug}`}><h3>{product.name}</h3></Link><p>{product.description}</p></div>
-        <Price price={product.price} effectivePrice={product.effectivePrice} hasActiveDiscount={product.hasActiveDiscount} />
+        <div className="product-card-description"><span className="product-kicker">{subline}</span><Link to={type === 'PRODUCT' ? `/products/${product.slug}` : `/packages/${product.slug}`}><h3>{product.name}</h3></Link><p>{product.description}</p>{fragrance && <div className="product-size-pills" aria-label="Available sizes">{fragrance.variants.filter((variant) => variant.isActive).map((variant) => <span key={variant.id}>{variant.size}</span>)}</div>}</div>
+        {fragrance ? <div className="price-line"><strong>From {money(fragrance.startingPrice)}</strong>{fragrance.hasActiveDiscount && <span className="discount-note">Sale on selected sizes</span>}</div> : giftSet && <Price price={giftSet.price} effectivePrice={giftSet.effectivePrice} hasActiveDiscount={giftSet.hasActiveDiscount} />}
       </div>
-      <button className="quick-add" disabled={!inStock} onClick={() => {
-        addItem({ itemType: type, itemId: product.id, name: product.name, image, price: product.effectivePrice, stock: type === 'PRODUCT' ? (product as Product).stock : (product as GiftPackage).availableStock });
-        toast.success(`${product.name} added to your bag`);
-      }}><ShoppingBag size={15} /> {inStock ? 'Add to bag' : 'Out of stock'}</button>
+      <button className="quick-add" disabled={!inStock} onClick={addToBag}><ShoppingBag size={15} /> {inStock ? 'Add to bag' : 'Out of stock'}</button>
     </article>
   );
 }
@@ -129,6 +147,7 @@ function ProductDetail({ isPackage = false }: { isPackage?: boolean }) {
   const { slug = '' } = useParams();
   const [selectedImage, setSelectedImage] = useState(0);
   const [quantity, setQuantity] = useState(1);
+  const [selectedVariantId, setSelectedVariantId] = useState('');
   const addItem = useCart((state) => state.addItem);
   const query = useQuery({
     queryKey: [isPackage ? 'package' : 'product', slug],
@@ -138,25 +157,44 @@ function ProductDetail({ isPackage = false }: { isPackage?: boolean }) {
   if (query.isLoading) return <div className="container detail-loading"><div className="skeleton" /><div className="skeleton" /></div>;
   if (query.isError || !query.data) return <div className="container page-error"><h2>We couldn’t find this fragrance.</h2><Link className="text-link" to={isPackage ? '/packages' : '/shop'}>Back to the collection <ArrowRight size={15} /></Link></div>;
   const item = query.data;
-  const stock = isPackage ? (item as GiftPackage).availableStock : (item as Product).stock;
+  const product = isPackage ? null : item as Product;
+  const giftSet = isPackage ? item as GiftPackage : null;
+  const selectedVariant = product
+    ? product.variants.find((variant) => variant.id === selectedVariantId)
+      || product.variants.find((variant) => variant.isActive && variant.inStock)
+      || product.variants[0]
+    : undefined;
+  const stock = product ? selectedVariant?.stock || 0 : giftSet?.availableStock || 0;
   const images = item.images.length ? item.images : [fallbackImage];
   const addToBag = () => {
-    addItem({ itemType: isPackage ? 'PACKAGE' : 'PRODUCT', itemId: item.id, name: item.name, image: images[0], price: item.effectivePrice, stock }, quantity);
+    if (product && selectedVariant) {
+      addItem({ itemType: 'PRODUCT', itemId: selectedVariant.id, name: product.name, slug: product.slug, size: selectedVariant.size, image: images[0], price: selectedVariant.effectivePrice, maxStock: selectedVariant.stock }, quantity);
+    } else if (giftSet) {
+      addItem({ itemType: 'PACKAGE', itemId: giftSet.id, name: giftSet.name, slug: giftSet.slug, image: images[0], price: giftSet.effectivePrice, maxStock: giftSet.availableStock }, quantity);
+    }
     toast.success(`${item.name} added to your bag`);
   };
   return <section className="container detail-page">
     <div className="detail-gallery"><div className="main-product-image"><img src={images[selectedImage] || fallbackImage} alt={item.name} /></div><div className="thumbnail-row">{images.map((image, index) => <button className={index === selectedImage ? 'thumbnail active' : 'thumbnail'} onClick={() => setSelectedImage(index)} key={image}><img src={image} alt={`${item.name} view ${index + 1}`} /></button>)}</div></div>
     <div className="detail-copy">
-      <span className="eyebrow">{isPackage ? 'THE GIFT COLLECTION' : (item as Product).category?.name || 'VEIL FRAGRANCE'}</span>
+      <span className="eyebrow">{isPackage ? 'THE GIFT COLLECTION' : product?.category?.name || 'VEIL FRAGRANCE'}</span>
       <h1>{item.name}</h1>
-      {!isPackage && <span className="detail-subtitle">{(item as Product).concentration || 'Eau de parfum'} · {(item as Product).size}</span>}
-      <Price price={item.price} effectivePrice={item.effectivePrice} hasActiveDiscount={item.hasActiveDiscount} />
+      {product && <span className="detail-subtitle">{product.concentration || 'Eau de parfum'}</span>}
+      {product && <div className="variant-selector" aria-label="Select fragrance size"><span className="eyebrow">CHOOSE A SIZE</span><div className="variant-pills">{product.variants.map((variant) => {
+        const unavailable = !variant.isActive || !variant.inStock;
+        const selected = variant.id === selectedVariant?.id;
+        return <button key={variant.id} type="button" className={`variant-pill${selected ? ' active' : ''}${unavailable ? ' unavailable' : ''}`} aria-pressed={selected} disabled={unavailable} onClick={() => { setSelectedVariantId(variant.id); setQuantity(1); }}>
+          <span>{variant.size}</span><small>{unavailable ? 'Sold out' : money(variant.effectivePrice)}</small>
+        </button>;
+      })}</div></div>}
+      {selectedVariant && <Price price={selectedVariant.price} effectivePrice={selectedVariant.effectivePrice} hasActiveDiscount={selectedVariant.hasActiveDiscount} />}
+      {giftSet && <Price price={giftSet.price} effectivePrice={giftSet.effectivePrice} hasActiveDiscount={giftSet.hasActiveDiscount} />}
       <div className="detail-divider" />
       <p className="detail-description">{item.description}</p>
-      {!isPackage && <FragranceNotes notes={(item as Product).notes} />}
-      {isPackage && <div className="included-list"><h3>Inside the box</h3>{(item as GiftPackage).items.map((included) => <div key={included.productId}><span>{included.product.name} <small>{included.product.size}</small></span><b>× {included.quantity}</b></div>)}</div>}
+      {product && <FragranceNotes notes={product.notes} />}
+      {giftSet && <div className="included-list"><h3>Inside the box</h3>{giftSet.items.map((included) => <div key={included.variantId}><span>{included.variant.product.name} <small>{included.variant.size}</small></span><b>× {included.quantity}</b></div>)}</div>}
       <div className="availability">{stock > 0 ? <><span className="stock-dot" /> In stock · {stock} available</> : <><span className="stock-dot out" /> Currently unavailable</>}</div>
-      {stock > 0 && <div className="purchase-row"><div className="quantity-control quantity-large"><button onClick={() => setQuantity(Math.max(1, quantity - 1))} aria-label="Decrease"><Minus size={14} /></button><span>{quantity}</span><button onClick={() => setQuantity(Math.min(stock, quantity + 1))} aria-label="Increase"><Plus size={14} /></button></div><button className="button button-dark" onClick={addToBag}><ShoppingBag size={16} /> Add to bag · {money(item.effectivePrice * quantity)}</button></div>}
+      {stock > 0 && <div className="purchase-row"><div className="quantity-control quantity-large"><button onClick={() => setQuantity(Math.max(1, quantity - 1))} aria-label="Decrease"><Minus size={14} /></button><span>{quantity}</span><button onClick={() => setQuantity(Math.min(stock, quantity + 1))} aria-label="Increase"><Plus size={14} /></button></div><button className="button button-dark" onClick={addToBag}><ShoppingBag size={16} /> Add to bag · {money((selectedVariant?.effectivePrice || giftSet?.effectivePrice || 0) * quantity)}</button></div>}
       <div className="detail-service"><div><Check size={15} /><span>Cash on delivery</span></div><div><Check size={15} /><span>Complimentary delivery over EGP 1,500</span></div></div>
       <button className="back-link" onClick={() => navigate(-1)}><ArrowLeft size={14} /> Back to collection</button>
     </div>
@@ -232,7 +270,7 @@ export function CheckoutPage() {
       <button className="button button-dark button-full checkout-submit" type="submit" disabled={mutation.isPending || settingsQuery.isLoading || settingsQuery.isError || !settings?.isOpen}>{mutation.isPending ? 'Placing your order…' : <>Place COD order · {orderTotal === null ? '—' : money(orderTotal)} <ArrowRight size={16} /></>}</button>
       <p className="checkout-privacy"><Check size={14} /> Cash on delivery · No payment required now</p>
     </form>
-    <aside className="order-summary"><span className="eyebrow">YOUR ORDER</span><h2>A considered choice.</h2><div className="summary-items">{items.map((item) => <div className="summary-item" key={`${item.itemType}-${item.itemId}`}><img src={item.image || fallbackImage} alt={item.name} /><div><b>{item.name}</b><span>Qty {item.quantity}</span></div><strong>{money(item.price * item.quantity)}</strong></div>)}</div><div className="summary-totals"><div className="summary-row"><span>Subtotal</span><strong>{money(subtotal)}</strong></div><div className="summary-row"><span>Delivery</span><strong>{deliveryFee === null ? '—' : deliveryFee ? money(deliveryFee) : 'Complimentary'}</strong></div>{deliveryFee !== null && deliveryFee > 0 && settings?.freeShippingThreshold && <p className="summary-hint">Complimentary delivery on orders over {money(settings.freeShippingThreshold)}.</p>}<div className="summary-row summary-total"><span>Total</span><strong>{orderTotal === null ? '—' : money(orderTotal)}</strong></div></div></aside></div>
+    <aside className="order-summary"><span className="eyebrow">YOUR ORDER</span><h2>A considered choice.</h2><div className="summary-items">{items.map((item) => <div className="summary-item" key={`${item.itemType}-${item.itemId}`}><img src={item.image || fallbackImage} alt={item.name} /><div><b>{item.name}</b>{item.size && <small>{item.size}</small>}<span>Qty {item.quantity}</span></div><strong>{money(item.price * item.quantity)}</strong></div>)}</div><div className="summary-totals"><div className="summary-row"><span>Subtotal</span><strong>{money(subtotal)}</strong></div><div className="summary-row"><span>Delivery</span><strong>{deliveryFee === null ? '—' : deliveryFee ? money(deliveryFee) : 'Complimentary'}</strong></div>{deliveryFee !== null && deliveryFee > 0 && settings?.freeShippingThreshold && <p className="summary-hint">Complimentary delivery on orders over {money(settings.freeShippingThreshold)}.</p>}<div className="summary-row summary-total"><span>Total</span><strong>{orderTotal === null ? '—' : money(orderTotal)}</strong></div></div></aside></div>
   </section>;
 }
 

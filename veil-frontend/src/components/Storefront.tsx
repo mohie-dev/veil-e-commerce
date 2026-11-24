@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { ArrowRight, Facebook, Instagram, Menu, MessageCircle, Minus, Phone, Plus, ShoppingBag, Trash2, X } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
@@ -12,9 +12,17 @@ export function StoreLayout() {
   const [cartOpen, setCartOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const cartCount = useCart((state) => state.items.reduce((sum, item) => sum + item.quantity, 0));
+  const migrationNotice = useCart((state) => state.migrationNotice);
+  const clearMigrationNotice = useCart((state) => state.clearMigrationNotice);
   const location = useLocation();
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: async () => (await api.get<StoreSettings>('/settings')) as unknown as StoreSettings });
   const phoneLink = settings?.phone?.replace(/[^\d+]/g, '');
+
+  useEffect(() => {
+    if (!migrationNotice) return;
+    toast.info('Your bag now uses fragrance sizes. Please add your preferred size again.');
+    clearMigrationNotice();
+  }, [migrationNotice, clearMigrationNotice]);
 
   return (
     <div className="store-shell">
@@ -95,8 +103,8 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
           {items.length === 0 ? <div className="empty-cart"><ShoppingBag size={28} /><p>Your bag is waiting for a trace.</p><Link className="text-link" to="/shop" onClick={onClose}>Discover fragrances <ArrowRight size={14} /></Link></div> : items.map((item) => (
             <article className="cart-line" key={`${item.itemType}-${item.itemId}`}>
               <img src={item.image || fallbackImage} alt={item.name} />
-              <div className="cart-line-info"><Link to={item.itemType === 'PRODUCT' ? `/products/${item.itemId}` : `/packages/${item.itemId}`} onClick={onClose}>{item.name}</Link><span>{money(item.price)}</span>
-                <div className="quantity-control"><button aria-label="Decrease quantity" onClick={() => item.quantity === 1 ? removeItem(item.itemType, item.itemId) : setQuantity(item.itemType, item.itemId, item.quantity - 1)}><Minus size={13} /></button><span>{item.quantity}</span><button aria-label="Increase quantity" onClick={() => item.quantity >= item.stock ? toast.error('Maximum available quantity reached') : setQuantity(item.itemType, item.itemId, item.quantity + 1)}><Plus size={13} /></button></div>
+              <div className="cart-line-info"><Link to={`/${item.itemType === 'PRODUCT' ? 'products' : 'packages'}/${item.slug || item.itemId}`} onClick={onClose}>{item.name}</Link>{item.size && <small className="cart-line-size">{item.size}</small>}<span>{money(item.price)}</span>
+                <div className="quantity-control"><button aria-label="Decrease quantity" onClick={() => item.quantity === 1 ? removeItem(item.itemType, item.itemId) : setQuantity(item.itemType, item.itemId, item.quantity - 1)}><Minus size={13} /></button><span>{item.quantity}</span><button aria-label="Increase quantity" onClick={() => item.quantity >= item.maxStock ? toast.error('Maximum available quantity reached') : setQuantity(item.itemType, item.itemId, item.quantity + 1)}><Plus size={13} /></button></div>
               </div>
               <button className="remove-line" aria-label={`Remove ${item.name}`} onClick={() => removeItem(item.itemType, item.itemId)}><Trash2 size={15} /></button>
             </article>

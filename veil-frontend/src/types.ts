@@ -29,19 +29,29 @@ export interface Notes {
   base?: string;
 }
 
+export interface ProductVariant {
+  id: string;
+  size: string;
+  price: number;
+  discountPrice: number | null;
+  discountExpiresAt: string | null;
+  effectivePrice: number;
+  hasActiveDiscount: boolean;
+  stock: number;
+  inStock: boolean;
+  isActive: boolean;
+  productId: string;
+}
+
 export interface Product {
   id: string;
   name: string;
   slug: string;
   description: string;
-  price: number;
-  discountPrice: number | null;
-  effectivePrice: number;
   hasActiveDiscount: boolean;
-  discountExpiresAt?: string | null;
-  stock: number;
   inStock: boolean;
-  size: string;
+  startingPrice: number;
+  variants: ProductVariant[];
   concentration?: string | null;
   notes?: Notes | null;
   images: string[];
@@ -53,9 +63,11 @@ export interface Product {
 
 export interface PackageItem {
   id?: string;
-  productId: string;
+  variantId: string;
   quantity: number;
-  product: Pick<Product, 'id' | 'name' | 'slug' | 'size' | 'price' | 'stock' | 'images' | 'isActive'>;
+  variant: Pick<ProductVariant, 'id' | 'size' | 'price' | 'discountPrice' | 'stock' | 'isActive'> & {
+    product: Pick<Product, 'id' | 'name' | 'slug' | 'images' | 'isActive'>;
+  };
 }
 
 export interface GiftPackage {
@@ -81,9 +93,11 @@ export interface CartLine {
   itemId: string;
   quantity: number;
   name: string;
+  slug?: string;
+  size?: string;
   image: string;
   price: number;
-  stock: number;
+  maxStock: number;
 }
 
 export interface OrderItem {
@@ -93,7 +107,7 @@ export interface OrderItem {
   unitPrice: number;
   quantity: number;
   subtotal: number;
-  productId: string | null;
+  variantId: string | null;
   packageId: string | null;
 }
 
@@ -151,14 +165,9 @@ export interface AdminUser {
   email: string;
 }
 
-export interface ProductInput {
+export interface ProductInfoInput {
   name: string;
   description: string;
-  price: number;
-  discountPrice?: number | null;
-  discountExpiresAt?: string | null;
-  stock: number;
-  size: string;
   concentration?: string;
   notes?: Notes;
   images: string[];
@@ -167,14 +176,42 @@ export interface ProductInput {
   isActive: boolean;
 }
 
-export interface PackageInput {
+export interface ProductVariantInput {
+  size: string;
+  price: number;
+  discountPrice?: number | null;
+  discountExpiresAt?: string | null;
+  stock: number;
+  isActive: boolean;
+}
+
+export interface CreateProductPayload extends ProductInfoInput {
+  variants: ProductVariantInput[];
+}
+
+export type UpdateProductPayload = Partial<ProductInfoInput>;
+
+export interface CreateVariantPayload extends ProductVariantInput {
+  productId: string;
+}
+
+export type UpdateVariantPayload = Partial<ProductVariantInput>;
+
+export interface PackageInfoInput {
   name: string;
   description: string;
   price: number;
   discountPrice?: number | null;
   discountExpiresAt?: string | null;
   images: string[];
-  items: { productId: string; quantity: number }[];
   isFeatured: boolean;
   isActive: boolean;
 }
+
+export interface CreatePackagePayload extends PackageInfoInput {
+  items: { variantId: string; quantity: number }[];
+}
+
+export type UpdatePackagePayload = Partial<PackageInfoInput> & {
+  items?: { variantId: string; quantity: number }[];
+};

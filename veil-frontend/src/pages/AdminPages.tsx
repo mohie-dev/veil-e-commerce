@@ -4,9 +4,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDownRight, ArrowRight, Boxes, Check, ChevronDown, CircleDollarSign, ClipboardList, ImagePlus, LayoutDashboard, LogOut, Package, Search, Settings, ShoppingBag, Users, X } from 'lucide-react';
 import { toast } from 'sonner';
 import api, { getErrorMessage } from '../lib/api';
-import type { AdminUser, Category, Customer, GiftPackage, Order, OrderStatus, OrderStats, Paginated, Product, ProductInput, PackageInput, StoreSettings } from '../types';
+import type { AdminUser, Category, CreatePackagePayload, CreateProductPayload, Customer, GiftPackage, Order, OrderStatus, OrderStats, Paginated, Product, ProductInfoInput, ProductVariant, ProductVariantInput, UpdatePackagePayload, UpdateProductPayload, StoreSettings } from '../types';
 import { fallbackImage, money } from '../components/Storefront';
 import { BrandLogo } from '../components/BrandLogo';
+import { variantsApi } from '../api/variants.api';
 
 const adminNav = [
   { to: '/admin', label: 'Overview', icon: LayoutDashboard, end: true },
@@ -175,9 +176,14 @@ export function AdminCatalogPage({ packages = false }: { packages?: boolean }) {
   const openEditor = (item: Product | GiftPackage | null) => { setEditing(item); setEditorOpen(true); };
   return <div className="admin-page"><AdminPageHeading eyebrow="THE VEIL COLLECTION" title={title} copy={`Curate the ${packages ? 'gift sets' : 'fragrances'} available in your store.`} action={<button className="button button-dark" onClick={() => openEditor(null)}><span>+</span> Add {packages ? 'gift set' : 'fragrance'}</button>} />
     <div className="toolbar"><label className="admin-search"><Search size={16} /><input placeholder={`Search ${title.toLowerCase()}`} value={search} onChange={(event) => setSearch(event.target.value)} /></label><label className="admin-select"><select value={activeFilter} onChange={(event) => setActiveFilter(event.target.value)}><option value="">All visibility</option><option value="true">Active</option><option value="false">Inactive</option></select><ChevronDown size={14} /></label></div>
-    <div className="admin-panel catalog-admin-panel">{query.isLoading ? <div className="table-loading">Loading the collection…</div> : query.data?.items.length ? <div className="table-scroll"><table className="admin-table"><thead><tr><th>ITEM</th><th>PRICE</th><th>STOCK</th><th>FEATURED</th><th>VISIBILITY</th><th /></tr></thead><tbody>{query.data.items.map((item) => {
-      const itemStock = packages ? (item as GiftPackage).availableStock : (item as Product).stock;
-      return <tr key={item.id}><td><div className="catalog-item-cell"><img src={item.images[0] || fallbackImage} alt="" /><div><b>{item.name}</b><small>/{item.slug}</small></div></div></td><td><b>{money(item.effectivePrice)}</b>{item.hasActiveDiscount && <small className="old-price">{money(item.price)}</small>}</td><td><span className={itemStock <= 5 ? 'low-stock' : ''}>{itemStock} {itemStock <= 5 && <small>Low</small>}</span></td><td>{item.isFeatured ? 'Yes' : '—'}</td><td><span className={`visibility ${item.isActive ? 'active' : ''}`}>{item.isActive ? 'Active' : 'Inactive'}</span></td><td><div className="table-actions"><button onClick={() => openEditor(item)}>Edit</button><button className="delete-action" onClick={() => { if (window.confirm(`Permanently delete ${item.name}?`)) remove.mutate(item.id); }}>Delete</button></div></td></tr>;
+    <div className="admin-panel catalog-admin-panel">{query.isLoading ? <div className="table-loading">Loading the collection…</div> : query.data?.items.length ? <div className="table-scroll"><table className="admin-table"><thead><tr><th>ITEM</th><th>PRICE</th>{!packages && <th>SIZES</th>}<th>STOCK</th><th>FEATURED</th><th>VISIBILITY</th><th /></tr></thead><tbody>{query.data.items.map((item) => {
+      const fragrance = packages ? null : item as Product;
+      const giftSet = packages ? item as GiftPackage : null;
+      const itemStock = fragrance ? fragrance.variants.reduce((total, variant) => total + (variant.isActive ? variant.stock : 0), 0) : giftSet?.availableStock || 0;
+      const startingPrice = fragrance?.startingPrice ?? giftSet?.effectivePrice ?? 0;
+      const hasDiscount = fragrance?.hasActiveDiscount ?? giftSet?.hasActiveDiscount ?? false;
+      const originalStartingPrice = fragrance?.variants.filter((variant) => variant.isActive).reduce((lowest, variant) => Math.min(lowest, variant.price), Number.POSITIVE_INFINITY);
+      return <tr key={item.id}><td><div className="catalog-item-cell"><img src={item.images[0] || fallbackImage} alt="" /><div><b>{item.name}</b><small>/{item.slug}</small></div></div></td><td><b>{fragrance ? `From ${money(startingPrice)}` : money(startingPrice)}</b>{hasDiscount && <small className="old-price">{money(fragrance ? originalStartingPrice || startingPrice : giftSet?.price || startingPrice)}</small>}</td>{fragrance && <td><span className="size-count">{fragrance.variants.length} sizes</span></td>}<td><span className={itemStock <= 5 ? 'low-stock' : ''}>{itemStock} {itemStock <= 5 && <small>Low</small>}</span></td><td>{item.isFeatured ? 'Yes' : '—'}</td><td><span className={`visibility ${item.isActive ? 'active' : ''}`}>{item.isActive ? 'Active' : 'Inactive'}</span></td><td><div className="table-actions"><button onClick={() => openEditor(item)}>Edit</button><button className="delete-action" onClick={() => { if (window.confirm(`Permanently delete ${item.name}?`)) remove.mutate(item.id); }}>Delete</button></div></td></tr>;
     })}</tbody></table></div> : <div className="empty-table">No {title.toLowerCase()} found.</div>}
     {query.isError && <AdminError error={query.error} />}</div>
     {editorOpen && (packages ? <PackageEditor item={editing as GiftPackage | null} onClose={() => setEditorOpen(false)} /> : <ProductEditor item={editing as Product | null} onClose={() => setEditorOpen(false)} />)}
@@ -189,41 +195,97 @@ function ProductEditor({ item, onClose }: { item: Product | null; onClose: () =>
   const categories = useQuery({ queryKey: ['categories', 'admin'], queryFn: async () => (await api.get<Category[]>('/categories', { params: { includeInactive: true } })) as unknown as Category[] });
   const [images, setImages] = useState(item?.images || []);
   const [notes, setNotes] = useState(item?.notes || {});
-  const mutation = useMutation({
-    mutationFn: async (payload: ProductInput) => item ? api.patch(`/products/${item.id}`, payload) : api.post('/products', payload),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['admin-catalog'] }); queryClient.invalidateQueries({ queryKey: ['products'] }); toast.success(item ? 'Fragrance updated' : 'Fragrance created'); onClose(); },
+  const [variants, setVariants] = useState<VariantDraft[]>(item?.variants.map(toVariantDraft) || [emptyVariantDraft()]);
+  const refreshCatalog = () => {
+    queryClient.invalidateQueries({ queryKey: ['admin-catalog'] });
+    queryClient.invalidateQueries({ queryKey: ['products'] });
+    queryClient.invalidateQueries({ queryKey: ['packages'] });
+    queryClient.invalidateQueries({ queryKey: ['admin-products-options'] });
+  };
+  const createProduct = useMutation({
+    mutationFn: async (payload: CreateProductPayload) => (await api.post<Product>('/products', payload)) as unknown as Product,
+    onSuccess: () => { refreshCatalog(); toast.success('Fragrance created'); onClose(); },
     onError: (error) => toast.error(getErrorMessage(error)),
   });
+  const updateProduct = useMutation({
+    mutationFn: async (payload: UpdateProductPayload) => (await api.patch<Product>(`/products/${item?.id}`, payload)) as unknown as Product,
+    onSuccess: () => { refreshCatalog(); toast.success('Fragrance details saved'); },
+    onError: (error) => toast.error(getErrorMessage(error)),
+  });
+  const createVariant = useMutation({
+    mutationFn: async (draft: VariantDraft) => variantsApi.createVariant({ ...toVariantPayload(draft), productId: item?.id || '' }),
+    onSuccess: (variant, submittedDraft) => { setVariants((current) => current.map((draft) => draft === submittedDraft ? toVariantDraft(variant) : draft)); refreshCatalog(); toast.success(`${variant.size} size added`); },
+    onError: (error) => toast.error(getErrorMessage(error)),
+  });
+  const updateVariant = useMutation({
+    mutationFn: async ({ id, draft }: { id: string; draft: VariantDraft }) => variantsApi.updateVariant(id, toVariantPayload(draft)),
+    onSuccess: (variant) => { setVariants((current) => current.map((draft) => draft.id === variant.id ? toVariantDraft(variant) : draft)); refreshCatalog(); toast.success(`${variant.size} size updated`); },
+    onError: (error) => toast.error(getErrorMessage(error)),
+  });
+  const deleteVariant = useMutation({
+    mutationFn: variantsApi.deleteVariant,
+    onSuccess: (_, id) => { setVariants((current) => current.filter((draft) => draft.id !== id)); refreshCatalog(); toast.success('Size removed'); },
+    onError: (error) => toast.error(getErrorMessage(error)),
+  });
+  const variantMutationPending = createVariant.isPending || updateVariant.isPending || deleteVariant.isPending;
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const data = Object.fromEntries(form.entries());
-    const payload: ProductInput = {
-      name: String(data.name), description: String(data.description), price: Number(data.price), stock: Number(data.stock),
-      size: String(data.size), categoryId: String(data.categoryId), images,
+    const info: ProductInfoInput = {
+      name: String(data.name).trim(), description: String(data.description).trim(),
+      categoryId: String(data.categoryId), images,
       concentration: String(data.concentration || ''),
-      discountPrice: data.discountPrice ? Number(data.discountPrice) : item?.discountPrice ? null : undefined,
-      discountExpiresAt: data.discountExpiresAt ? new Date(String(data.discountExpiresAt)).toISOString() : item?.discountExpiresAt ? null : undefined,
       notes: { top: notes.top || undefined, heart: notes.heart || undefined, base: notes.base || undefined },
       isFeatured: data.isFeatured === 'on', isActive: data.isActive === 'on',
     };
     if (images.length === 0) { toast.error('Upload at least one product image'); return; }
-    mutation.mutate(payload);
+    if (item) {
+      updateProduct.mutate(info);
+      return;
+    }
+    const validationMessage = validateVariantDrafts(variants);
+    if (validationMessage) { toast.error(validationMessage); return; }
+    createProduct.mutate({ ...info, variants: variants.map(toVariantPayload) });
   }
-  return <EditorModal title={item ? 'Edit fragrance' : 'New fragrance'} onClose={onClose}><form className="editor-form" onSubmit={submit}>
-    <div className="form-grid"><label className="field field-wide">Fragrance name<input required name="name" defaultValue={item?.name} /></label><label className="field field-wide">Description<textarea required name="description" rows={3} defaultValue={item?.description} /></label><label className="field">Price (EGP)<input required type="number" min="1" step="0.01" name="price" defaultValue={item?.price} /></label><label className="field">Discount price (optional)<input type="number" min="1" step="0.01" name="discountPrice" defaultValue={item?.discountPrice || ''} /></label><label className="field">Discount expiry<input type="datetime-local" name="discountExpiresAt" defaultValue={item?.discountExpiresAt ? item.discountExpiresAt.slice(0, 16) : ''} /></label><label className="field">Stock<input required type="number" min="0" name="stock" defaultValue={item?.stock ?? 0} /></label><label className="field">Size<input required name="size" placeholder="50ml" defaultValue={item?.size} /></label><label className="field">Concentration<input name="concentration" placeholder="Eau de Parfum" defaultValue={item?.concentration || ''} /></label><label className="field field-wide">Category<select required name="categoryId" defaultValue={item?.categoryId || ''}><option value="" disabled>Select category</option>{categories.data?.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label></div>
-    <div className="editor-subheading">Fragrance notes <span>Optional</span></div><div className="form-grid"><label className="field">Top notes<input value={notes.top || ''} onChange={(event) => setNotes({ ...notes, top: event.target.value })} /></label><label className="field">Heart notes<input value={notes.heart || ''} onChange={(event) => setNotes({ ...notes, heart: event.target.value })} /></label><label className="field field-wide">Base notes<input value={notes.base || ''} onChange={(event) => setNotes({ ...notes, base: event.target.value })} /></label></div>
-    <div className="editor-subheading">Images</div><ImageUploader images={images} onChange={setImages} /><ToggleFields featured={item?.isFeatured} active={item?.isActive} /><EditorActions onClose={onClose} pending={mutation.isPending} />
-  </form></EditorModal>;
+  function addVariantDraft() {
+    setVariants((current) => [...current, emptyVariantDraft()]);
+  }
+  function submitVariant(draft: VariantDraft) {
+    const validationMessage = validateVariantDrafts([draft]);
+    if (validationMessage) { toast.error(validationMessage); return; }
+    if (draft.id) updateVariant.mutate({ id: draft.id, draft });
+    else if (item) createVariant.mutate(draft);
+  }
+  function removeVariant(draft: VariantDraft) {
+    if (!draft.id) {
+      if (!item && variants.length <= 1) { toast.error('A fragrance needs at least one size'); return; }
+      setVariants((current) => current.filter((variant) => variant !== draft));
+      return;
+    }
+    if (variants.filter((variant) => variant.id).length <= 1) { toast.error('A fragrance needs at least one saved size'); return; }
+    if (window.confirm(`Remove the ${draft.size} size?`)) deleteVariant.mutate(draft.id);
+  }
+  return <EditorModal title={item ? 'Edit fragrance' : 'New fragrance'} onClose={onClose}>
+    <form className="editor-form" onSubmit={submit}>
+      <div className="editor-section-head"><span className="step-number">01</span><div><h3>Fragrance details</h3><p>Name, story and collection placement.</p></div></div>
+      <div className="form-grid"><label className="field field-wide">Fragrance name<input required name="name" defaultValue={item?.name} /></label><label className="field field-wide">Description<textarea required name="description" rows={3} defaultValue={item?.description} /></label><label className="field">Concentration<input name="concentration" placeholder="Eau de Parfum" defaultValue={item?.concentration || ''} /></label><label className="field field-wide">Category<select required name="categoryId" defaultValue={item?.categoryId || ''}><option value="" disabled>Select category</option>{categories.data?.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label></div>
+      <div className="editor-subheading">Fragrance notes <span>Optional</span></div><div className="form-grid"><label className="field">Top notes<input value={notes.top || ''} onChange={(event) => setNotes({ ...notes, top: event.target.value })} /></label><label className="field">Heart notes<input value={notes.heart || ''} onChange={(event) => setNotes({ ...notes, heart: event.target.value })} /></label><label className="field field-wide">Base notes<input value={notes.base || ''} onChange={(event) => setNotes({ ...notes, base: event.target.value })} /></label></div>
+      <div className="editor-subheading">Product images</div><ImageUploader images={images} onChange={setImages} /><ToggleFields featured={item?.isFeatured} active={item?.isActive} />
+      {!item && <div className="variant-builder"><div className="editor-subheading"><span>02 · Sizes & pricing</span><button type="button" className="add-variant-button" onClick={addVariantDraft}>+ Add size</button></div><p className="variant-helper">Set a separate price and stock level for each bottle size.</p>{variants.map((variant, index) => <VariantDraftFields key={variant.id || `new-${index}`} draft={variant} index={index} onChange={(next) => setVariants((current) => current.map((entry, entryIndex) => entryIndex === index ? next : entry))} onRemove={() => removeVariant(variant)} removable={variants.length > 1} />)}</div>}
+      <EditorActions onClose={onClose} pending={item ? updateProduct.isPending : createProduct.isPending} submitText={item ? 'Save product details' : 'Create fragrance'} />
+    </form>
+    {item && <section className="variant-manager"><div className="editor-section-head"><span className="step-number">02</span><div><h3>Manage sizes</h3><p>Each size has its own price, discount and stock.</p></div></div>{variants.map((variant, index) => <VariantDraftFields key={variant.id || `new-${index}`} draft={variant} index={index} onChange={(next) => setVariants((current) => current.map((entry, entryIndex) => entryIndex === index ? next : entry))} onRemove={() => removeVariant(variant)} removable={variants.length > 1} disabled={variantMutationPending} actions={<div className="variant-row-actions">{variant.id ? <button type="button" className="button button-light" onClick={() => submitVariant(variant)} disabled={variantMutationPending}>{updateVariant.isPending ? 'Saving…' : 'Save size'}</button> : <button type="button" className="button button-dark" onClick={() => submitVariant(variant)} disabled={variantMutationPending}>{createVariant.isPending ? 'Adding…' : 'Add size'}</button>}</div>} />)}<button type="button" className="add-variant-button add-variant-wide" onClick={addVariantDraft} disabled={variantMutationPending}>+ Add another size</button></section>}
+  </EditorModal>;
 }
 
 function PackageEditor({ item, onClose }: { item: GiftPackage | null; onClose: () => void }) {
   const queryClient = useQueryClient();
-  const products = useQuery({ queryKey: ['admin-products-options'], queryFn: async () => (await api.get<Paginated<Product>>('/products/admin', { params: { limit: 100, isActive: true } })) as unknown as Paginated<Product> });
+  const products = useQuery({ queryKey: ['admin-products-options'], queryFn: async () => (await api.get<Paginated<Product>>('/products/admin', { params: { limit: 100 } })) as unknown as Paginated<Product> });
   const [images, setImages] = useState(item?.images || []);
-  const [contents, setContents] = useState<{ productId: string; quantity: number }[]>(item?.items.map((entry) => ({ productId: entry.productId, quantity: entry.quantity })) || []);
+  const [contents, setContents] = useState<{ variantId: string; quantity: number }[]>(item?.items.map((entry) => ({ variantId: entry.variantId, quantity: entry.quantity })) || []);
   const mutation = useMutation({
-    mutationFn: async (payload: PackageInput) => item ? api.patch(`/packages/${item.id}`, payload) : api.post('/packages', payload),
+    mutationFn: async (payload: CreatePackagePayload | UpdatePackagePayload) => item ? api.patch(`/packages/${item.id}`, payload) : api.post('/packages', payload),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['admin-catalog'] }); queryClient.invalidateQueries({ queryKey: ['packages'] }); toast.success(item ? 'Gift set updated' : 'Gift set created'); onClose(); },
     onError: (error) => toast.error(getErrorMessage(error)),
   });
@@ -235,18 +297,100 @@ function PackageEditor({ item, onClose }: { item: GiftPackage | null; onClose: (
     if (!images.length) { toast.error('Upload at least one gift set image'); return; }
     mutation.mutate({ name: String(data.name), description: String(data.description), price: Number(data.price), discountPrice: data.discountPrice ? Number(data.discountPrice) : item?.discountPrice ? null : undefined, discountExpiresAt: data.discountExpiresAt ? new Date(String(data.discountExpiresAt)).toISOString() : item?.discountExpiresAt ? null : undefined, images, items: contents, isFeatured: data.isFeatured === 'on', isActive: data.isActive === 'on' });
   }
-  function addProduct() {
-    const available = products.data?.items.find((product) => !contents.some((entry) => entry.productId === product.id));
-    if (available) setContents([...contents, { productId: available.id, quantity: 1 }]);
-    else toast.error('All available fragrances have been added');
+  const allVariants = products.data?.items.flatMap((product) => product.variants.map((variant) => ({ product, variant }))) || [];
+  const availableVariants = allVariants.filter(({ product, variant }) => product.isActive && variant.isActive);
+  function addVariant() {
+    const available = availableVariants.find(({ variant }) => !contents.some((entry) => entry.variantId === variant.id));
+    if (available) setContents((current) => [...current, { variantId: available.variant.id, quantity: 1 }]);
+    else toast.error('All active fragrance sizes have been added');
   }
   return <EditorModal title={item ? 'Edit gift set' : 'New gift set'} onClose={onClose}><form className="editor-form" onSubmit={submit}>
     <div className="form-grid"><label className="field field-wide">Gift set name<input required name="name" defaultValue={item?.name} /></label><label className="field field-wide">Description<textarea required name="description" rows={3} defaultValue={item?.description} /></label><label className="field">Price (EGP)<input required type="number" min="1" step="0.01" name="price" defaultValue={item?.price} /></label><label className="field">Discount price<input type="number" min="1" step="0.01" name="discountPrice" defaultValue={item?.discountPrice || ''} /></label><label className="field field-wide">Discount expiry<input type="datetime-local" name="discountExpiresAt" defaultValue={item?.discountExpiresAt ? item.discountExpiresAt.slice(0, 16) : ''} /></label></div>
-    <div className="editor-subheading">Included fragrances <button className="text-link" type="button" onClick={addProduct}>+ Add fragrance</button></div>
-    {contents.map((entry, index) => <div className="package-item-editor" key={`${entry.productId}-${index}`}><select value={entry.productId} onChange={(event) => setContents(contents.map((current, currentIndex) => currentIndex === index ? { ...current, productId: event.target.value } : current))}><option value="" disabled>Select fragrance</option>{products.data?.items.map((product) => <option key={product.id} value={product.id} disabled={contents.some((other, otherIndex) => otherIndex !== index && other.productId === product.id)}>{product.name}</option>)}</select><label>Qty<input type="number" min="1" value={entry.quantity} onChange={(event) => setContents(contents.map((current, currentIndex) => currentIndex === index ? { ...current, quantity: Math.max(1, Number(event.target.value)) } : current))} /></label><button type="button" onClick={() => setContents(contents.filter((_, currentIndex) => currentIndex !== index))}><X size={15} /></button></div>)}
+    <div className="editor-subheading">Included sizes <button className="text-link" type="button" onClick={addVariant}>+ Add size</button></div>
+    {contents.map((entry, index) => <div className="package-item-editor" key={`${entry.variantId}-${index}`}><select required value={entry.variantId} onChange={(event) => setContents((current) => current.map((line, currentIndex) => currentIndex === index ? { ...line, variantId: event.target.value } : line))}><option value="" disabled>Select a fragrance size</option>{allVariants.map(({ product, variant }) => <option key={variant.id} value={variant.id} disabled={!product.isActive || !variant.isActive || contents.some((other, otherIndex) => otherIndex !== index && other.variantId === variant.id)}>{product.name} — {variant.size} ({variant.stock} in stock)</option>)}</select><label>Qty<input aria-label={`Quantity of included ${entry.variantId}`} type="number" min="1" value={entry.quantity} onChange={(event) => setContents((current) => current.map((line, currentIndex) => currentIndex === index ? { ...line, quantity: Math.max(1, Number(event.target.value)) } : line))} /></label><button type="button" aria-label="Remove included size" onClick={() => setContents((current) => current.filter((_, currentIndex) => currentIndex !== index))}><X size={15} /></button></div>)}
     {products.isError && <AdminError error={products.error} />}
+    {!products.isLoading && !availableVariants.length && <div className="inline-notice">Add an active fragrance size before building a gift set.</div>}
     <div className="editor-subheading">Images</div><ImageUploader images={images} onChange={setImages} /><ToggleFields featured={item?.isFeatured} active={item?.isActive} /><EditorActions onClose={onClose} pending={mutation.isPending} />
   </form></EditorModal>;
+}
+
+type VariantDraft = Omit<ProductVariantInput, 'price' | 'discountPrice' | 'discountExpiresAt' | 'stock'> & {
+  id?: string;
+  price: string;
+  discountPrice: string;
+  discountExpiresAt: string;
+  stock: string;
+};
+
+function emptyVariantDraft(): VariantDraft {
+  return { size: '', price: '', discountPrice: '', discountExpiresAt: '', stock: '0', isActive: true };
+}
+
+function toVariantDraft(variant: ProductVariant): VariantDraft {
+  return {
+    id: variant.id,
+    size: variant.size,
+    price: String(variant.price),
+    discountPrice: variant.discountPrice === null ? '' : String(variant.discountPrice),
+    discountExpiresAt: variant.discountExpiresAt ? new Date(variant.discountExpiresAt).toISOString().slice(0, 16) : '',
+    stock: String(variant.stock),
+    isActive: variant.isActive,
+  };
+}
+
+function validateVariantDrafts(drafts: VariantDraft[]): string | null {
+  if (!drafts.length) return 'Add at least one size before saving the fragrance.';
+  const sizes = new Set<string>();
+  for (const draft of drafts) {
+    const size = draft.size.trim();
+    const price = Number(draft.price);
+    const discount = draft.discountPrice.trim() ? Number(draft.discountPrice) : null;
+    const stock = Number(draft.stock);
+    if (!size) return 'Enter a size such as 30ml or 50ml.';
+    if (sizes.has(size.toLowerCase())) return `The size "${size}" is listed more than once.`;
+    sizes.add(size.toLowerCase());
+    if (!Number.isFinite(price) || price < 1) return `Enter a valid price for ${size}.`;
+    if (discount !== null && (!Number.isFinite(discount) || discount < 1 || discount >= price)) return `The discount for ${size} must be lower than its price.`;
+    if (!Number.isInteger(stock) || stock < 0) return `Enter a valid stock quantity for ${size}.`;
+  }
+  return null;
+}
+
+function toVariantPayload(draft: VariantDraft): ProductVariantInput {
+  return {
+    size: draft.size.trim(),
+    price: Number(draft.price),
+    discountPrice: draft.discountPrice.trim() ? Number(draft.discountPrice) : null,
+    discountExpiresAt: draft.discountExpiresAt ? new Date(draft.discountExpiresAt).toISOString() : null,
+    stock: Number(draft.stock),
+    isActive: draft.isActive,
+  };
+}
+
+function VariantDraftFields({ draft, index, onChange, onRemove, removable, disabled, actions }: {
+  draft: VariantDraft;
+  index: number;
+  onChange: (draft: VariantDraft) => void;
+  onRemove: () => void;
+  removable: boolean;
+  disabled?: boolean;
+  actions?: React.ReactNode;
+}) {
+  function change<K extends keyof VariantDraft>(key: K, value: VariantDraft[K]) {
+    onChange({ ...draft, [key]: value });
+  }
+  return <article className="variant-editor-card">
+    <div className="variant-card-heading"><div><span className="variant-index">SIZE {String(index + 1).padStart(2, '0')}</span><strong>{draft.size || 'New size'}</strong></div>{removable && <button type="button" className="variant-remove" onClick={onRemove} disabled={disabled} aria-label={`Remove ${draft.size || 'size'}`}><X size={16} /></button>}</div>
+    <div className="variant-fields">
+      <label className="field">Size<input required disabled={disabled} value={draft.size} onChange={(event) => change('size', event.target.value)} placeholder="50ml" /></label>
+      <label className="field">Price (EGP)<input required disabled={disabled} type="number" inputMode="decimal" min="1" step="0.01" value={draft.price} onChange={(event) => change('price', event.target.value)} placeholder="950" /></label>
+      <label className="field">Sale price <span className="optional-label">Optional</span><input disabled={disabled} type="number" inputMode="decimal" min="1" step="0.01" value={draft.discountPrice} onChange={(event) => change('discountPrice', event.target.value)} placeholder="—" /></label>
+      <label className="field">Sale ends <span className="optional-label">Optional</span><input disabled={disabled} type="datetime-local" value={draft.discountExpiresAt} onChange={(event) => change('discountExpiresAt', event.target.value)} /></label>
+      <label className="field">Stock<input required disabled={disabled} type="number" inputMode="numeric" min="0" step="1" value={draft.stock} onChange={(event) => change('stock', event.target.value)} /></label>
+      <label className="variant-active-toggle"><input type="checkbox" disabled={disabled} checked={draft.isActive} onChange={(event) => change('isActive', event.target.checked)} /><span>Available for sale</span></label>
+    </div>
+    {actions}
+  </article>;
 }
 
 function ToggleFields({ featured = false, active = true }: { featured?: boolean; active?: boolean }) {
@@ -256,8 +400,8 @@ function ToggleFields({ featured = false, active = true }: { featured?: boolean;
 function EditorModal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return <div className="modal-backdrop editor-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="admin-modal editor-modal"><div className="modal-heading"><div><span className="eyebrow">COLLECTION MANAGEMENT</span><h2>{title}</h2></div><button className="icon-button" onClick={onClose}><X /></button></div>{children}</div></div>;
 }
-function EditorActions({ onClose, pending }: { onClose: () => void; pending: boolean }) {
-  return <div className="editor-actions"><button type="button" className="button button-light" onClick={onClose}>Cancel</button><button type="submit" className="button button-dark" disabled={pending}>{pending ? 'Saving…' : <>Save changes <Check size={15} /></>}</button></div>;
+function EditorActions({ onClose, pending, submitText = 'Save changes' }: { onClose: () => void; pending: boolean; submitText?: string }) {
+  return <div className="editor-actions"><button type="button" className="button button-light" onClick={onClose}>Cancel</button><button type="submit" className="button button-dark" disabled={pending}>{pending ? 'Saving…' : <>{submitText} <Check size={15} /></>}</button></div>;
 }
 
 export function AdminCustomersPage() {
